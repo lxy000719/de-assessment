@@ -184,6 +184,19 @@ The raw `prerequisites` JSON is retained in Bronze; its individual relationships
 
 An enrollment is uniquely identified by `enrollment_id`, **not** by (`participant_id`, `course_id`): a participant may enroll in the same course more than once.
 
+### Many-to-Many Relationship
+
+Participants and courses have a many-to-many relationship:
+
+- A participant can enroll in multiple courses.
+- A course can have multiple participants.
+
+This relationship is resolved through `silver_enrollments`, which acts as an associative table connecting `silver_participants` and `silver_courses`.
+
+Each enrollment has a unique `enrollment_id` and references one `participant_id` and one `course_id`, forming two one-to-many relationships.
+
+Repeat enrollments by the same participant in the same course are allowed, as they may represent separate registrations.
+
 **`silver_course_prerequisites`**
 
 | Column | Type | Constraint / Description |
@@ -208,3 +221,110 @@ Both columns reference the course master table. For example, a Bronze prerequisi
 - **Enrollment vs. Completion:** Enrollment records represent registrations, not confirmed course completions. Completion status would require an additional data source.
 - **Financial Validation:** Subsidies and credits are assumed not to exceed the course amount in combination. This business rule requires confirmation.
 - **Data Updates:** Conflicting records and changes to participant or course information require a defined update and versioning strategy.
+
+
+## Gold Layer — Analytics and Reporting
+
+### 1. Purpose
+
+The Gold layer provides business-ready datasets optimized for analytical queries and reporting. It adopts a **Star Schema** to simplify joins, support aggregation, and improve reporting performance.
+
+### 2. Table Design
+
+#### 2.1 `gold_fact_enrollments`
+
+**Grain:** One row per enrollment.
+
+| Column | Data Type | Description |
+|---|---|---|
+| enrollment_id | INTEGER | Primary key; unique enrollment identifier |
+| participant_id | TEXT | Foreign key to `gold_dim_participants` |
+| course_id | INTEGER | Foreign key to `gold_dim_courses` |
+| course_date | DATE | Foreign key to `gold_dim_date` |
+| amount | DECIMAL(12,2) | Original course amount |
+| subsidy | DECIMAL(12,2) | Subsidy applied |
+| credits_used | DECIMAL(12,2) | Credits used |
+| net_amount | DECIMAL(12,2) | `amount - subsidy - credits_used` |
+| enrollment_count | INTEGER | Constant value of 1 for aggregation |
+
+**Design considerations:**
+- Preserve one record per enrollment, including repeat registrations for the same course.
+- Store additive financial measures for reporting.
+- Calculate `net_amount` during the Silver-to-Gold transformation, subject to business confirmation.
+
+#### 2.2 `gold_dim_participants`
+
+**Grain:** One row per participant.
+
+| Column | Data Type | Description |
+|---|---|---|
+| participant_id | TEXT | Primary key |
+| participant_name | TEXT | Standardized participant name |
+
+**Design considerations:** Provide a consistent participant reference sourced from `silver_participants`.
+
+#### 2.3 `gold_dim_courses`
+
+**Grain:** One row per course.
+
+| Column | Data Type | Description |
+|---|---|---|
+| course_id | INTEGER | Primary key |
+| course_name | TEXT | Course name |
+| course_description | TEXT | Course description |
+
+**Design considerations:** Provide descriptive attributes from `silver_courses`. Prerequisite relationships remain modeled in Silver.
+
+#### 2.4 `gold_dim_date`
+
+**Grain:** One row per calendar date.
+
+| Column | Data Type | Description |
+|---|---|---|
+| date_key | DATE | Primary key |
+| year | INTEGER | Calendar year |
+| quarter | INTEGER | Calendar quarter |
+| month | INTEGER | Calendar month |
+| month_name | TEXT | Month name |
+| day | INTEGER | Day of month |
+| day_of_week | INTEGER | Day of week; convention to be defined |
+
+**Design considerations:** A generated calendar dimension supports consistent month, quarter, and year reporting.
+
+### 3. Relationships
+
+| Fact Table Column | Dimension Table Key | Cardinality |
+|---|---|---|
+| `participant_id` | `gold_dim_participants.participant_id` | Many-to-One |
+| `course_id` | `gold_dim_courses.course_id` | Many-to-One |
+| `course_date` | `gold_dim_date.date_key` | Many-to-One |
+
+The fact table is central to the star schema. Each enrollment references one participant, one course, and one date.
+
+### 4. Transformation Rules
+
+1. **Fact loading:** Load validated records from `silver_enrollments`, maintaining one row per enrollment.
+2. **Dimension loading:** Populate participant and course dimensions from the corresponding Silver tables.
+3. **Derived measures:** Calculate `net_amount = amount - subsidy - credits_used`; set `enrollment_count = 1`.
+4. **Date dimension:** Generate calendar attributes for the required reporting date range.
+5. **Referential integrity:** Verify that fact records reference valid dimension keys.
+6. **Idempotency:** Use deterministic keys and upsert or replace strategies so reruns do not duplicate data.
+
+### 5. Reporting Use Cases
+
+| Reporting Requirement | Measures / Dimensions |
+|---|---|
+| Total enrollments by course | `SUM(enrollment_count)`, `course_name` |
+| Monthly enrollment trends | `SUM(enrollment_count)`, `year`, `month` |
+| Total course amount | `SUM(amount)`, `course_name` |
+| Subsidies and credits used | `SUM(subsidy)`, `SUM(credits_used)` |
+| Net amount by course | `SUM(net_amount)`, `course_name` |
+| Participant enrollment history | `participant_id`, `course_name`, `course_date` |
+
+### 6. Design Decisions and Assumptions
+
+- **Star Schema:** A reporting-oriented dimensional model simplifies analytical queries compared with the normalized Silver model.
+- **Enrollment grain:** Repeat registrations remain separate fact records.
+- **Financial measures:** `net_amount` assumes subsidies and credits reduce the original course amount; this requires business confirmation.
+- **Completion tracking:** Enrollment records do not prove course completion. Completion reporting requires another data source.
+- **Aggregation strategy:** Pre-aggregated tables can be added if query volume or performance warrants them; they are not required initially.
