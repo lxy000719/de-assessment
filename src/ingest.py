@@ -39,8 +39,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 
 def parse_course_date(value):
+    """Parse supported date formats into ISO format."""
     if pd.isna(value):
         return None
 
@@ -55,6 +55,7 @@ def parse_course_date(value):
     return None
 
 def read_csv():
+    """Read the source CSV and check required columns."""
     df = pd.read_csv(CSV_PATH, dtype=str)
 
     missing_cols = set(REQUIRED_COLUMNS) - set(df.columns)
@@ -65,6 +66,7 @@ def read_csv():
 
 
 def validate_and_transform(df, valid_course_ids):
+    """Separate valid and rejected enrollment records."""
     clean_df = df.copy()
 
     # Store multiple validation errors per row
@@ -142,7 +144,6 @@ def validate_and_transform(df, valid_course_ids):
         "Negative financial value",
     )
 
-    # Business assumption:
     # subsidy + credits_used cannot exceed amount
     add_error(
         clean_df["subsidy"] + clean_df["credits_used"]
@@ -171,6 +172,7 @@ def validate_and_transform(df, valid_course_ids):
 
 
 def load_to_sqlite(conn, valid_df):
+    """Insert new enrollments without duplicating existing IDs."""
     sql = """
         INSERT INTO enrollments (
             enrollment_id,
@@ -205,6 +207,7 @@ def load_to_sqlite(conn, valid_df):
 
 
 def run_pipeline():
+    """Validate, load, and report ingestion results."""
     if not DB_PATH.is_file():
         raise FileNotFoundError(DB_PATH)
 
