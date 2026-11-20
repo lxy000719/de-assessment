@@ -1,0 +1,2 @@
+enrollment_id,participant_id,participant_name,course_id,course_date,amount,subsidy,credits_used,validation_error
+21,P005,Edward Goh,5,2023-02-29,900.00,500.00,400.00,Invalid course date
